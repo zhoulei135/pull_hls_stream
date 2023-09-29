@@ -57,7 +57,7 @@ class Stream:
         self.url_m3 = url_m3
         self.url_m3_p = urlparse(url_m3)
         self.ts_tt_k = deque([])  # 一种队列用法，可快速操作，性能优于list.insert() + list.append()
-        self.ts_tt_v = deque([])  # 记录 ttfb,ttlb,ts_md5
+        self.ts_tt_v = deque([])  # 记录 ts_md5, ttfb, ttlb
         self.m3_md5 = None  # 记录m3u8文件的md5
         self.m3_ttfb = 0
         self.m3_ttlb = 0

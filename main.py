@@ -1,4 +1,4 @@
-# encoding: utf-8
+# encoding:utf-8
 import concurrent.futures
 import csv
 import hashlib
@@ -20,8 +20,8 @@ def logger_in():
     # 创建 MemoryHandler 类的实例，指定日志缓冲区刷新
     mem = logging.handlers.MemoryHandler(capacity=10)
     # 创建一个日志轮转功能
-    ro = logging.handlers.RotatingFileHandler(__file__ + ".log", maxBytes=2 * 1024 * 1024,
-                                              backupCount=10)  # backup-size 100M
+    ro = logging.handlers.RotatingFileHandler(os.getcwd() + "/running.log", maxBytes=2 * 1024 * 1024,
+                                              backupCount=10,encoding='utf-8-sig')  # backup-size 100M
     ro.setLevel(logging.INFO)
     # create formatter
     formatter = logging.Formatter('%(asctime)s || %(name)s || %(levelname)s || %(message)s')
@@ -58,7 +58,7 @@ class Stream:
         self.url_m3_p = urlparse(url_m3)
         self.ts_tt_k = deque([])  # 一种队列用法，可快速操作，性能优于list.insert() + list.append()
         self.ts_tt_v = deque([])  # 记录 ts_md5, ttfb, ttlb
-        self.m3_md5 = None  # 记录m3u8文件的md5
+        self.m3_md5 = deque([])  # 记录m3u8文件的md5
         self.m3_ttfb = 0
         self.m3_ttlb = 0
 
@@ -116,6 +116,10 @@ class Stream:
             logger.error('requests.ConnectionError: {} {}'.format(url, err))
             return None, 0
 
+        except requests.exceptions.ChunkedEncodingError as err:
+            logger.error('requests.ConnectionError: {} {}'.format(url, err))
+            return None, 0
+
         r_bytes = r.content
         ttfb = r.elapsed.total_seconds()
 
@@ -150,9 +154,10 @@ class Stream:
 
         if r_b is None:
             logger.error('"process_m3u8" "if r_b is None" ，"get_context" 结果为空; url: {}'.format(self.url_m3))
+            self.m3_md5.append('get为空，检查日志')
             return
 
-        self.m3_md5 = hashlib.md5(r_b).hexdigest()
+        self.m3_md5.append(hashlib.md5(r_b).hexdigest())
         m3u8 = r_b.decode('utf-8')
         m3_l = m3u8.splitlines()
 
@@ -223,8 +228,13 @@ class Stream:
         """
         time_l = []
 
-        # 每次循环 m3u8 必有，所以直接执行
-        time_l.append(['m3u8', self.sequence, self.m3_md5, self.m3_ttfb, self.m3_ttlb])
+        # 如果m3u8下载失败，时延属性为空，理论上没执行一次m3u8后self.m3_md5都会被处理掉，先不判断是否为空，避免下载失败时没有ttlb保存
+        # while self.m3_md5:
+        try:
+            m3_md5 = self.m3_md5.popleft()
+        except IndexError:
+            m3_md5 = 'process_delay()m3_md5 IndexError，未见过的场景需反馈添加'
+        time_l.append(['m3u8', self.sequence, m3_md5, self.m3_ttfb, self.m3_ttlb])
         # 判断有没有执行过ts，直到队列取完
         while self.ts_tt_k:
             time_l.append(['ts', self.ts_tt_k.popleft()] + self.ts_tt_v.popleft())

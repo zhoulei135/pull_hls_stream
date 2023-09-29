@@ -2,3 +2,5 @@
 env/
 # 忽略 ide 文件
 .ide/
+*.conf
+*.log

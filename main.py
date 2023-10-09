@@ -21,7 +21,7 @@ def logger_in():
     mem = logging.handlers.MemoryHandler(capacity=10)
     # 创建一个日志轮转功能
     ro = logging.handlers.RotatingFileHandler(os.getcwd() + "/running.log", maxBytes=2 * 1024 * 1024,
-                                              backupCount=10,encoding='utf-8-sig')  # backup-size 100M
+                                              backupCount=10, encoding='utf-8-sig')  # backup-size 100M
     ro.setLevel(logging.INFO)
     # create formatter
     formatter = logging.Formatter('%(asctime)s || %(name)s || %(levelname)s || %(message)s')
@@ -59,6 +59,7 @@ class Stream:
         self.ts_tt_k = deque([])  # 一种队列用法，可快速操作，性能优于list.insert() + list.append()
         self.ts_tt_v = deque([])  # 记录 ts_md5, ttfb, ttlb
         self.m3_md5 = deque([])  # 记录m3u8文件的md5
+        self.m3_r_b_len = 0
         self.m3_ttfb = 0
         self.m3_ttlb = 0
 
@@ -70,7 +71,7 @@ class Stream:
         :return:
         """
 
-        header_ = ['类型', 'sequence或ts_name', '文件md5', 'ttfb', 'ttlb']
+        header_ = ['类型', 'sequence或ts_name', '文件md5', '文件Bytes', 'ttfb(s)', 'ttlb(s)']
 
         # 创建文件夹
         stream_path = '{0}{1}/'.format(self.save_path, self.stream_name)
@@ -100,33 +101,36 @@ class Stream:
         """
         _MAX_RESPONSE_OK_NUMBER = 206
 
+        _return_tup = None, 0, 0
+
         s = requests.Session()
         try:
             r = s.get(url, timeout=(1, 1))
 
         except requests.HTTPError as err:
             logger.error('requests.HTTPError: {} {}'.format(url, err))
-            return None, 0
+            return _return_tup
 
         except requests.ReadTimeout as err:
             logger.error('requests.ReadTimeout: {} {}'.format(url, err))
-            return None, 0
+            return _return_tup
 
         except requests.ConnectionError as err:
             logger.error('requests.ConnectionError: {} {}'.format(url, err))
-            return None, 0
+            return _return_tup
 
         except requests.exceptions.ChunkedEncodingError as err:
             logger.error('requests.ConnectionError: {} {}'.format(url, err))
-            return None, 0
+            return _return_tup
 
         r_bytes = r.content
         ttfb = r.elapsed.total_seconds()
 
         if r.status_code > _MAX_RESPONSE_OK_NUMBER:
-            logger.error('"get_context" 状态码>{}'.format(_MAX_RESPONSE_OK_NUMBER))
-            return None, 0
-        return r_bytes, ttfb
+            logger.error('"get_context" 状态码 = {}'.format(r.status_code))
+            return _return_tup
+        r_bytes_len = len(r_bytes)
+        return r_bytes, r_bytes_len, ttfb
 
     @staticmethod
     def save_file(file_b, file_path):
@@ -149,7 +153,7 @@ class Stream:
         :return:
         """
         start_time = time.time()
-        r_b, self.m3_ttfb = self.get_context(self.url_m3)
+        r_b, self.m3_r_b_len, self.m3_ttfb = self.get_context(self.url_m3)
         self.m3_ttlb = time.time() - start_time
 
         if r_b is None:
@@ -205,19 +209,19 @@ class Stream:
                 self.ts_tt_k.append(ts_name)
 
                 start_time = time.time()
-                r_b, ts_ttfb = self.get_context(self.ts_url)
+                r_b, r_b_l, ts_ttfb = self.get_context(self.ts_url)
                 ts_ttlb = time.time() - start_time
 
                 if r_b is not None:
                     ts_md5 = hashlib.md5(r_b).hexdigest()
                     self.save_file(r_b, ts_path)
-                    self.ts_tt_v.append([ts_md5, ts_ttfb, ts_ttlb])
+                    self.ts_tt_v.append([ts_md5, r_b_l, ts_ttfb, ts_ttlb])
 
                     logger.info('{} ts_success：{}'.format(self.stream_name, self.ts_url))
 
                 else:
                     logger.error('"process_m3u8" "if r_b is None" ，"get_context" 结果为空; url: {}'.format(self.url_m3))
-                    self.ts_tt_v.append(['get为空，检查日志', ts_ttfb, ts_ttlb])
+                    self.ts_tt_v.append(['get为空，检查日志', r_b_l, ts_ttfb, ts_ttlb])
                     return
             # time.sleep(1)
 
@@ -228,13 +232,13 @@ class Stream:
         """
         time_l = []
 
-        # 如果m3u8下载失败，时延属性为空，理论上没执行一次m3u8后self.m3_md5都会被处理掉，先不判断是否为空，避免下载失败时没有ttlb保存
+        # 如果m3u8下载失败，时延属性为空，理论上每执行一次m3u8后self.m3_md5都会被处理掉，先不判断是否为空，避免下载失败时没有ttlb保存
         # while self.m3_md5:
         try:
             m3_md5 = self.m3_md5.popleft()
         except IndexError:
             m3_md5 = 'process_delay()m3_md5 IndexError，未见过的场景需反馈添加'
-        time_l.append(['m3u8', self.sequence, m3_md5, self.m3_ttfb, self.m3_ttlb])
+        time_l.append(['m3u8', self.sequence, m3_md5, self.m3_r_b_len, self.m3_ttfb, self.m3_ttlb])
         # 判断有没有执行过ts，直到队列取完
         while self.ts_tt_k:
             time_l.append(['ts', self.ts_tt_k.popleft()] + self.ts_tt_v.popleft())
@@ -256,8 +260,8 @@ class Stream:
             self.process_ts()
             self.process_delay()
 
-            # 间隔2/3个targetDuration时间获取一次
-            time.sleep(int(int(self.targetDuration) / 3))
+            # 间隔1个targetDuration时间获取一次
+            time.sleep(int(self.targetDuration))
 
 
 def main():
@@ -270,7 +274,7 @@ def main():
             inss = []
             for stream_conf in f:
                 stream_conf = stream_conf.strip()
-                s_c_l = stream_conf.split(' ')
+                s_c_l = stream_conf.split()
                 stream_name = s_c_l[0]
                 url_m3 = s_c_l[1]
                 save_path = s_c_l[2]

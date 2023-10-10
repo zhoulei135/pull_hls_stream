@@ -44,21 +44,26 @@ logger = logger_in()
 
 class Stream:
 
-    def __init__(self, stream_name, url_m3, save_path):
-        self.m3_EXTINF = []
-        self.ts_urls = []
+    def __init__(self, save_path, stream_name, src_m3_scheme, src_m3_domain, cdn_m3_url):
         self.save_path = save_path
+        self.stream_name = stream_name
+        self.src_m3_scheme = src_m3_scheme
+        self.src_m3_domain = src_m3_domain
+        self.cdn_m3_url = cdn_m3_url
+
+        self.cdn_m3_md5 = None  # 记录m3u8文件的md5
+        self.cdn_m3_EXTINFS = deque([])  # 记录EXTINF信息
+        self.cdn_ts_urls = deque([])  # 记录cdn_ts url数据
+
         self.ts_url = None
         self.targetDuration = None
         self.sequence = None
         self.m3_tail = None  # 记录临时处理的extinf值
         self.ts_tag = None  # 标记ts是否进行过更新，1=是；0=否
-        self.stream_name = stream_name
-        self.url_m3 = url_m3
-        self.url_m3_p = urlparse(url_m3)
+
         self.ts_tt_k = deque([])  # 一种队列用法，可快速操作，性能优于list.insert() + list.append()
         self.ts_tt_v = deque([])  # 记录 ts_md5, ttfb, ttlb
-        self.m3_md5 = deque([])  # 记录m3u8文件的md5
+
         self.m3_r_b_len = 0
         self.m3_ttfb = 0
         self.m3_ttlb = 0
@@ -71,25 +76,47 @@ class Stream:
         :return:
         """
 
-        header_ = ['类型', 'sequence或ts_name', '文件md5', '文件Bytes', 'ttfb(s)', 'ttlb(s)']
+        # 初始化self.src_m3_url
+        url_p = urlparse(self.cdn_m3_url)
+        url_p._replace(scheme=self.src_m3_scheme,netloc = self.src_m3_domain)
+        self.src_m3_url = url_p.geturl()
 
-        # 创建文件夹
-        stream_path = '{0}{1}/'.format(self.save_path, self.stream_name)
-        if not os.path.exists(stream_path):
-            os.makedirs(stream_path)
+        # 初始化创建文件夹
+        self.stream_path = '{0}{1}/'.format(self.save_path, self.stream_name)
+        self.src_path = '{0}src/'.format(self.stream_path)
+        self.cdn_path = '{0}cdn/'.format(self.stream_path)
 
-        # 创建记录时延数据的文件
-        csv_path = '{0}{1}/1_{1}_delay_data.csv'.format(self.save_path, self.stream_name)
-        if not os.path.exists(csv_path):
-            # 编码使用
-            with open('{0}{1}/1_{1}_delay_data.csv'.format(self.save_path, self.stream_name), 'a', newline='',
-                      encoding='utf-8-sig') as f:
-                writer = csv.writer(f)
-                writer.writerows([header_])
-        # 获取一次m3u8文件，初始化实例
-        self.process_m3u8()
-        if self.m3_ttfb == 0:
-            logger.error('"m_init" 初始化实例失败，"get_context" 结果为空; url: {}'.format(self.url_m3))
+        def mkdir(path):
+            if not os.path.exists(path):
+                os.makedirs(path)
+
+        mkdir(self.stream_path)
+        mkdir(self.src_path)
+        mkdir(self.cdn_path)
+
+        # 初始化创建表格
+        m3_csv_header = ['cdn_sequence', 'cdn_文件md5', 'cdn_文件Bytes', 'cdn_ttfb(s)', 'cdn_ttlb(s)', 'src_sequence',
+                         'src_文件md5', 'src_文件Bytes', 'src_ttfb(s)', 'src_ttlb(s)']
+        ts_csv_header = ['ts', 'cdn_文件md5', 'cdn_文件Bytes', 'cdn_ttfb(s)', 'cdn_ttlb(s)', 'src_文件md5',
+                         'src_文件Bytes', 'src_ttfb(s)', 'src_ttlb(s)']
+
+        m3_csv_path = '{0}{1}/{1}_m3u8_delay_data.csv'.format(self.save_path, self.stream_name)
+        ts_csv_path = '{0}{1}/{1}_ts_delay_data.csv'.format(self.save_path, self.stream_name)
+
+        def touch_csv(path, header):
+            if not os.path.exists(path):
+                # 编码使用
+                with open(path, 'a', newline='', encoding='utf-8-sig') as f:
+                    writer = csv.writer(f)
+                    writer.writerows([header])
+
+        touch_csv(m3_csv_path, m3_csv_header)
+        touch_csv(ts_csv_path, ts_csv_header)
+
+        # 获取一次m3u8文件，初始化实例，判断url破解是否正确
+        self.process_m3u8_cdn()
+        if self.cdn_m3_bytes_ttfb == 0:
+            logger.error('"m_init" 初始化实例失败，"get_context" 结果为空; url: {}'.format(self.cdn_m3_url))
             exit(1)
 
     @staticmethod
@@ -133,6 +160,13 @@ class Stream:
         return r_bytes, r_bytes_len, ttfb
 
     @staticmethod
+    def get_delay(url):
+        start_time = time.time()
+        r_bytes, r_bytes_len, r_bytes_ttfb = Stream.get_context(url)
+        r_bytes_ttlb = time.time() - start_time
+        return r_bytes, r_bytes_len, r_bytes_ttfb, r_bytes_ttlb
+
+    @staticmethod
     def save_file(file_b, file_path):
         """
 
@@ -144,7 +178,7 @@ class Stream:
         with open(file_path, 'wb') as f:
             f.write(file_b)
 
-    def process_m3u8(self, ):
+    def process_m3u8_cdn(self, ):
         """
         更新流实例属性，self.ts_url self.sequence self.targetDuration
         判断m3u8文件最后一行的格式，修改self.m3_tail属性，用于生成self.ts_url
@@ -152,138 +186,87 @@ class Stream:
         v1.1: 修改为将所有ts uri保存到 self.m3_EXTINF，ts下载时遍历
         :return:
         """
-        start_time = time.time()
-        r_b, self.m3_r_b_len, self.m3_ttfb = self.get_context(self.url_m3)
-        self.m3_ttlb = time.time() - start_time
-
-        if r_b is None:
-            logger.error('"process_m3u8" "if r_b is None" ，"get_context" 结果为空; url: {}'.format(self.url_m3))
-            self.m3_md5.append('get为空，检查日志')
+        r_bytes, r_bytes_len, r_bytes_ttfb, r_bytes_ttlb = Stream.get_delay(self.cdn_m3_url)
+        self.cdn_m3_len = r_bytes_len
+        self.cdn_m3_bytes_ttfb = r_bytes_ttfb
+        self.cdn_bytes_ttlb = r_bytes_ttlb
+        if r_bytes is None:
+            logger.error('"process_m3u8" "if r_b is None" ，"get_context" 结果为空; url: {}'.format(self.cdn_m3_url))
+            self.cdn_m3_md5 = 'get为空，检查日志'
             return
 
-        self.m3_md5.append(hashlib.md5(r_b).hexdigest())
-        m3u8 = r_b.decode('utf-8')
-        m3_l = m3u8.splitlines()
+        self.cdn_m3_md5 = hashlib.md5(r_bytes).hexdigest()
+        cdn_m3u8_lines = r_bytes.decode('utf-8')
+        cdn_m3u8_list = cdn_m3u8_lines.splitlines()
+        cdn_m3u8_list = deque(cdn_m3u8_list)
 
-        while m3_l:
-            line = m3_l.pop(0)
+        while cdn_m3u8_list:
+            line = cdn_m3u8_list.popleft()
             if '#EXT-X-TARGETDURATION' in line:
-                self.targetDuration = line.split(':')[-1]
+                self.cdn_m3_targetDuration = line.split(':')[-1]
                 continue
             elif '#EXT-X-MEDIA-SEQUENCE' in line:
-                self.sequence = line.split(':')[-1]
+                self.cdn_m3_sequence = line.split(':')[-1]
                 continue
             elif '#EXTINF' in line:
-                self.m3_EXTINF.append(m3_l.pop(0))
+                self.cdn_m3_EXTINFS.append(cdn_m3u8_list.popleft())
 
-        m3_name_t = time.strftime('%Y_%m_%d_%H_%M_%S_', time.localtime())
-        m3_path = '{}{}/{}{}.m3u8'.format(self.save_path, self.stream_name, m3_name_t, str(self.sequence))
-        self.save_file(r_b, m3_path)
-        logger.info('{} m3_success：{}'.format(self.stream_name, self.url_m3))
+        # 保存m3u8文件
+        cdn_m3_name_t = time.strftime('%Y_%m_%d_%H_%M_%S_', time.localtime())
+        cdn_m3_path = '{0}/{1}{2}.m3u8'.format(self.cdn_path, cdn_m3_name_t, str(self.cdn_m3_sequence))
+        Stream.save_file(r_bytes, cdn_m3_path)
+        logger.info('{} cdn m3u8 get success：{}'.format(self.stream_name, self.cdn_m3_sequence))
 
-        while self.m3_EXTINF:
-            self.m3_tail = self.m3_EXTINF.pop()
-            if 'http' in self.m3_tail:
-                self.ts_urls.append(self.m3_tail)
+        while self.cdn_m3_EXTINFS:
+            cdn_m3_extinf = self.cdn_m3_EXTINFS.popleft()
+            cdn_m3_url_p = urlparse(self.cdn_m3_url)
+            if 'http' in cdn_m3_extinf:
+                self.cdn_ts_urls.append(cdn_m3_extinf)
                 return
-            elif '/' in self.m3_tail:
-                self.ts_urls.append('{}://{}{}'.format(self.url_m3_p.scheme, self.url_m3_p.netloc, self.m3_tail))
+            elif '/' in cdn_m3_extinf:
+                self.cdn_ts_urls.append('{}://{}{}'.format(cdn_m3_url_p.scheme, cdn_m3_url_p.netloc, cdn_m3_extinf))
                 return
             else:
-                uri_l = self.url_m3_p.path.split('/')
-                uri_l[-1] = self.m3_tail
+                uri_l = cdn_m3_url_p.path.split('/')
+                uri_l[-1] = cdn_m3_extinf
                 uri = '/'.join(uri_l)
-                self.ts_urls.append('{}://{}{}'.format(self.url_m3_p.scheme, self.url_m3_p.netloc, uri))
+                self.cdn_ts_urls.append('{}://{}{}'.format(cdn_m3_url_p.scheme, cdn_m3_url_p.netloc, uri))
 
-    def process_ts(self):
-        """
-        读self.ts_url属性，下载保存ts文件，ttfb, ttlb 修改到属性，process_delay方法处理
-        :return:
-        """
+    def process_m3u8_src(self, ):
+        r_bytes, r_bytes_len, r_bytes_ttfb, r_bytes_ttlb = Stream.get_delay(self.cdn_m3_url)
+        self.src_m3_len = r_bytes_len
+        self.src_m3_bytes_ttfb = r_bytes_ttfb
+        self.src_bytes_ttlb = r_bytes_ttlb
+        if r_bytes is None:
+            logger.error('"process_m3u8" "if r_b is None" ，"get_context" 结果为空; url: {}'.format(self.src_m3_url))
+            self.cdn_m3_md5 = 'get为空，检查日志'
+            return
+        self.src_m3_md5 = hashlib.md5(r_bytes).hexdigest()
 
-        while self.ts_urls:
-            self.ts_url = self.ts_urls.pop()
-            ts_name = os.path.basename(urlparse(self.ts_url).path).split('/')[-1]
-            ts_path = '{}{}/{}'.format(self.save_path, self.stream_name, ts_name)
-            if not os.path.exists(ts_path):
-                self.ts_tt_k.append(ts_name)
+        src_m3u8_lines = r_bytes.decode('utf-8')
+        src_m3u8_list = src_m3u8_lines.splitlines()
+        src_m3u8_list = deque(src_m3u8_list)
+        while src_m3u8_list:
+            line = src_m3u8_list.popleft()
+            if '#EXT-X-MEDIA-SEQUENCE' in line:
+                self.src_m3_sequence = line.split(':')[-1]
+                break
 
-                start_time = time.time()
-                r_b, r_b_l, ts_ttfb = self.get_context(self.ts_url)
-                ts_ttlb = time.time() - start_time
-
-                if r_b is not None:
-                    ts_md5 = hashlib.md5(r_b).hexdigest()
-                    self.save_file(r_b, ts_path)
-                    self.ts_tt_v.append([ts_md5, r_b_l, ts_ttfb, ts_ttlb])
-
-                    logger.info('{} ts_success：{}'.format(self.stream_name, self.ts_url))
-
-                else:
-                    logger.error('"process_m3u8" "if r_b is None" ，"get_context" 结果为空; url: {}'.format(self.url_m3))
-                    self.ts_tt_v.append(['get为空，检查日志', r_b_l, ts_ttfb, ts_ttlb])
-                    return
-            # time.sleep(1)
-
-    def process_delay(self):
-        """
-        每循环执行一次get_stream后调用该方法处理时延数据，追加写入csv
-        :return:
-        """
-        time_l = []
-
-        # 如果m3u8下载失败，时延属性为空，理论上每执行一次m3u8后self.m3_md5都会被处理掉，先不判断是否为空，避免下载失败时没有ttlb保存
-        # while self.m3_md5:
-        try:
-            m3_md5 = self.m3_md5.popleft()
-        except IndexError:
-            m3_md5 = 'process_delay()m3_md5 IndexError，未见过的场景需反馈添加'
-        time_l.append(['m3u8', self.sequence, m3_md5, self.m3_r_b_len, self.m3_ttfb, self.m3_ttlb])
-        # 判断有没有执行过ts，直到队列取完
-        while self.ts_tt_k:
-            time_l.append(['ts', self.ts_tt_k.popleft()] + self.ts_tt_v.popleft())
-
-        csv_path = '{0}{1}/1_{1}_delay_data.csv'.format(self.save_path, self.stream_name)
-
-        if time_l:
-            with open(csv_path, 'a', newline='', encoding='utf-8-sig') as f:
-                writer = csv.writer(f)
-                writer.writerows(time_l)
-
-    def get_stream(self):
-        """
-        间隔2/3个targetDuration时间获取m3u8文件，判断m3u8文件有更新，则持续拉流
-        :return:
-        """
-        while True:
-            self.process_m3u8()
-            self.process_ts()
-            self.process_delay()
-
-            # 间隔1个targetDuration时间获取一次
-            time.sleep(int(self.targetDuration))
+        # 保存m3u8文件
+        src_m3_name_t = time.strftime('%Y_%m_%d_%H_%M_%S_', time.localtime())
+        src_m3_path = '{0}/{1}{2}.m3u8'.format(self.src_path, src_m3_name_t, str(self.src_m3_sequence))
+        Stream.save_file(r_bytes, src_m3_path)
+        logger.info('{} src m3u8 get success：{}'.format(self.stream_name, self.src_m3_sequence))
 
 
-def main():
-    """
-    读取配置文件创建实例到列表，再创建线程，再批量执行
-    :return:
-    """
-    with open('stream.conf') as f:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=100) as executor:
-            inss = []
-            for stream_conf in f:
-                stream_conf = stream_conf.strip()
-                s_c_l = stream_conf.split()
-                stream_name = s_c_l[0]
-                url_m3 = s_c_l[1]
-                save_path = s_c_l[2]
-                inss.append(Stream(stream_name, url_m3, save_path))
+    def threading_m3u8(self, ):
+        self_threading = [self.process_m3u8_cdn, self.process_m3u8_src]
 
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             thread_pool = []
-            for fuc in inss:
+            for fuc in self_threading:
                 # 按函数方式创建线程，不能带括号
-                future = executor.submit(fuc.get_stream)
+                future = executor.submit(fuc)
                 thread_pool.append(future)
 
             for future in concurrent.futures.as_completed(thread_pool):  # 并发执行
@@ -291,4 +274,8 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    S = Stream('d:/ts/', 'test_stream_1', 'http', '220.161.87.62:8800', 'http://220.161.87.62:8800/hls/0/index.m3u8')
+    S.threading_m3u8()
+    print('Done')
+
+# cdn和src的m3u8文件保存都正常

@@ -4,6 +4,7 @@ import csv
 import hashlib
 import logging
 import os
+import threading
 import time
 from collections import deque
 from logging.handlers import RotatingFileHandler
@@ -55,8 +56,13 @@ class Stream:
         self.cdn_m3_EXTINFS = deque([])  # 记录EXTINF信息
         self.cdn_ts_urls = deque([])  # 记录cdn_ts url数据
 
+        self.cdn_ts_keys = deque([])
+        self.cdn_ts_values = deque([])
+
+        self.src_ts_urls = deque([])
+        self.src_ts_delay_dict = {}  # 记录src_ts url数据
+
         self.ts_url = None
-        self.targetDuration = None
         self.sequence = None
         self.m3_tail = None  # 记录临时处理的extinf值
         self.ts_tag = None  # 标记ts是否进行过更新，1=是；0=否
@@ -78,7 +84,7 @@ class Stream:
 
         # 初始化self.src_m3_url
         url_p = urlparse(self.cdn_m3_url)
-        url_p._replace(scheme=self.src_m3_scheme,netloc = self.src_m3_domain)
+        url_p._replace(scheme=self.src_m3_scheme, netloc=self.src_m3_domain)
         self.src_m3_url = url_p.geturl()
 
         # 初始化创建文件夹
@@ -189,13 +195,14 @@ class Stream:
         r_bytes, r_bytes_len, r_bytes_ttfb, r_bytes_ttlb = Stream.get_delay(self.cdn_m3_url)
         self.cdn_m3_len = r_bytes_len
         self.cdn_m3_bytes_ttfb = r_bytes_ttfb
-        self.cdn_bytes_ttlb = r_bytes_ttlb
+        self.cdn_m3_bytes_ttlb = r_bytes_ttlb
         if r_bytes is None:
-            logger.error('"process_m3u8" "if r_b is None" ，"get_context" 结果为空; url: {}'.format(self.cdn_m3_url))
+            logger.error(
+                '"process_m3u8_cdn" "if r_b is None" ，"Stream.get_delay" 结果为空; url: {}'.format(self.cdn_m3_url))
             self.cdn_m3_md5 = 'get为空，检查日志'
             return
-
         self.cdn_m3_md5 = hashlib.md5(r_bytes).hexdigest()
+
         cdn_m3u8_lines = r_bytes.decode('utf-8')
         cdn_m3u8_list = cdn_m3u8_lines.splitlines()
         cdn_m3u8_list = deque(cdn_m3u8_list)
@@ -258,6 +265,67 @@ class Stream:
         Stream.save_file(r_bytes, src_m3_path)
         logger.info('{} src m3u8 get success：{}'.format(self.stream_name, self.src_m3_sequence))
 
+        # 通过self.cdn_ts_urls构造self.src_ts_urls
+        for cdn_ts_url in self.cdn_ts_urls:
+            cdn_ts_url_p = urlparse(cdn_ts_url)
+            src_ts_url = cdn_ts_url_p._replace(netloc=self.src_m3_domain).geturl()
+            self.src_ts_urls.append(src_ts_url)
+
+    def process_ts_cdn(self):
+        while self.cdn_ts_urls:
+            ts_url = self.cdn_ts_urls.popleft()
+            ts_name = os.path.basename(urlparse(ts_url).path).split('/')[-1]
+            ts_path = '{0}/{1}'.format(self.cdn_path, ts_name)
+
+            if os.path.exists(ts_path):
+                continue
+
+            self.cdn_ts_keys.append(ts_name)
+
+            r_bytes, r_bytes_len, r_bytes_ttfb, r_bytes_ttlb = Stream.get_delay(ts_url)
+
+            if r_bytes is None:
+                logger.error(
+                    '{} "process_ts_cdn" "if r_b is None" ，"Stream.get_delay" 结果为空; url: {}'.format(
+                        self.stream_name, self.cdn_m3_url))
+                ts_md5 = 'get为空，检查日志'
+                self.cdn_ts_values.append([ts_md5, r_bytes_len, r_bytes_ttfb, r_bytes_ttlb])
+                return
+
+            ts_md5 = hashlib.md5(r_bytes).hexdigest()
+            self.cdn_ts_values.append([ts_md5, r_bytes_len, r_bytes_ttfb, r_bytes_ttlb])
+
+            # 保存ts文件
+            Stream.save_file(r_bytes, ts_path)
+            logger.info('{} cdn ts get success：{}'.format(self.stream_name, ts_url))
+
+    def process_ts_src(self):
+        while self.src_ts_urls:
+            ts_url = self.src_ts_urls.popleft()
+            ts_name = os.path.basename(urlparse(ts_url).path).split('/')[-1]
+            ts_path = '{0}/{1}'.format(self.src_path, ts_name)
+
+            if os.path.exists(ts_path):
+                continue
+
+            self.src_ts_delay_dict[ts_name] = []
+
+            r_bytes, r_bytes_len, r_bytes_ttfb, r_bytes_ttlb = Stream.get_delay(ts_url)
+
+            if r_bytes is None:
+                logger.error(
+                    '{} "process_ts_cdn" "if r_b is None" ，"Stream.get_delay" 结果为空; url: {}'.format(
+                        self.stream_name, self.cdn_m3_url))
+                ts_md5 = 'get为空，检查日志'
+                self.src_ts_delay_dict[ts_name] = [ts_md5, r_bytes_len, r_bytes_ttfb, r_bytes_ttlb]
+                return
+
+            ts_md5 = hashlib.md5(r_bytes).hexdigest()
+            self.src_ts_delay_dict[ts_name] = [ts_md5, r_bytes_len, r_bytes_ttfb, r_bytes_ttlb]
+
+            # 保存ts文件
+            Stream.save_file(r_bytes, ts_path)
+            logger.info('{} src ts get success：{}'.format(self.stream_name, ts_url))
 
     def threading_m3u8(self, ):
         self_threading = [self.process_m3u8_cdn, self.process_m3u8_src]
@@ -272,10 +340,29 @@ class Stream:
             for future in concurrent.futures.as_completed(thread_pool):  # 并发执行
                 future.result()
 
+    def threading_ts(self):
+        threading_cdn = threading.Thread(self.process_ts_cdn())
+        threading_src = threading.Thread(self.process_ts_src())
+        threading_cdn.start()
+        threading_src.start()
+        threading_cdn.join()
+        threading_src.join()
+
+
+    def get_stream(self):
+        while True:
+            self.threading_m3u8()
+            self.threading_ts()
+
+            # 间隔1个targetDuration时间获取一次
+            time.sleep(int(self.cdn_m3_targetDuration))
+
+def main():
+    S = Stream('d:/ts/', 'test_stream_1', 'http', '220.161.87.62:8800', 'http://220.161.87.62:8800/hls/0/index.m3u8')
+    S.get_stream()
+    print('Done')
 
 if __name__ == '__main__':
-    S = Stream('d:/ts/', 'test_stream_1', 'http', '220.161.87.62:8800', 'http://220.161.87.62:8800/hls/0/index.m3u8')
-    S.threading_m3u8()
-    print('Done')
+    main()
 
 # cdn和src的m3u8文件保存都正常

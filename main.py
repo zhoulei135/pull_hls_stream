@@ -145,7 +145,7 @@ class Stream:
         _return_tup = None, 0, 0
 
         try:
-            r = s.get(url, timeout=(1, 1), allow_redirects=False)
+            r = s.get(url, timeout=(1, 3), allow_redirects=False)
 
         except requests.HTTPError as err:
             logger.error('requests.HTTPError: {} {}'.format(url, err))

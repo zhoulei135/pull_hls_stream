@@ -61,7 +61,7 @@ class Stream:
         self.cdn_m3_targetDuration = None
         self.cdn_m3_EXTINFS = deque([])  # 记录EXTINF信息
         self.cdn_ts_urls = deque([])  # 记录cdn_ts url数据
-        # process_m3_src
+        # process_m3u8_src
         self.src_m3_len = 0
         self.src_m3_bytes_ttfb = 0
         self.src_m3_bytes_ttlb = 0
@@ -80,9 +80,17 @@ class Stream:
         :return:
         """
 
+        # 初始化创建requests.Session()对象
+        self.cdn_session = requests.Session()
+        self.src_session = requests.Session()
+
         # 初始化self.src_m3_url
         url_p = urlparse(self.cdn_m3_url)
         self.src_m3_url = url_p._replace(scheme=self.src_m3_scheme, netloc=self.src_m3_domain).geturl()
+        context = Stream.get_context(self.src_session, self.src_m3_url)
+
+        if isinstance(context, requests.Response):
+            self.src_m3_url = context.headers.get('Location')
 
         # 初始化创建文件夹
         self.stream_path = '{0}{1}/'.format(self.save_path, self.stream_name)
@@ -116,9 +124,6 @@ class Stream:
         touch_csv(self.m3_csv_path, m3_csv_header)
         touch_csv(self.ts_csv_path, ts_csv_header)
 
-        # 初始化创建requests.Session()对象
-        self.cdn_session = requests.Session()
-        self.src_session = requests.Session()
         # 获取一次m3u8文件，初始化实例，判断url破解是否正确
         self.process_m3u8_cdn()
         # 初始化执行一次，先取出来，以免错位
@@ -140,7 +145,7 @@ class Stream:
         _return_tup = None, 0, 0
 
         try:
-            r = s.get(url, timeout=(1, 1))
+            r = s.get(url, timeout=(1, 1), allow_redirects=False)
 
         except requests.HTTPError as err:
             logger.error('requests.HTTPError: {} {}'.format(url, err))
@@ -161,9 +166,14 @@ class Stream:
         r_bytes = r.content
         ttfb = r.elapsed.total_seconds()
 
+        # 通常如果有重定向都是源站m3u8 url给重定向，这里判断下，直接返回对象，由 process_m3u8_src 去更新self.src_m3_url
+        if r.status_code == 302 or r.status_code == 301:
+            return r
+
         if r.status_code > _MAX_RESPONSE_OK_NUMBER:
             logger.error('"get_context" 状态码 = {}'.format(r.status_code))
             return _return_tup
+
         r_bytes_len = len(r_bytes)
         return r_bytes, r_bytes_len, ttfb
 

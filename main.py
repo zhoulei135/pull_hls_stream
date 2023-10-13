@@ -45,12 +45,11 @@ logger = logger_in()
 
 class Stream:
 
-    def __init__(self, save_path, stream_name, src_m3_scheme, src_m3_domain, cdn_m3_url):
+    def __init__(self, save_path, stream_name, src_m3_url, cdn_m3_url):
 
         self.save_path = save_path
         self.stream_name = stream_name
-        self.src_m3_scheme = src_m3_scheme
-        self.src_m3_domain = src_m3_domain
+        self.src_m3_url = src_m3_url
         self.cdn_m3_url = cdn_m3_url
         # process_m3_cdn
         self.cdn_m3_len = 0
@@ -85,8 +84,6 @@ class Stream:
         self.src_session = requests.Session()
 
         # 初始化self.src_m3_url
-        url_p = urlparse(self.cdn_m3_url)
-        self.src_m3_url = url_p._replace(scheme=self.src_m3_scheme, netloc=self.src_m3_domain).geturl()
         context = Stream.get_context(self.src_session, self.src_m3_url)
 
         if isinstance(context, requests.Response):
@@ -424,10 +421,9 @@ def main():
                 s_c_l = stream_conf.split()
                 save_path = s_c_l[0]
                 stream_name = s_c_l[1]
-                src_m3_scheme = s_c_l[2]
-                src_m3_domain = s_c_l[3]
-                cdn_m3_url = s_c_l[4]
-                inss.append(Stream(save_path, stream_name, src_m3_scheme, src_m3_domain, cdn_m3_url))
+                src_m3_url = s_c_l[2]
+                cdn_m3_urln = s_c_l[3]
+                inss.append(Stream(save_path, stream_name, src_m3_url, cdn_m3_urln))
 
             thread_pool = []
             for fuc in inss:

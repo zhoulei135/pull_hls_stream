@@ -11,6 +11,8 @@ from logging.handlers import RotatingFileHandler
 from urllib.parse import urlparse
 
 import requests
+from requests.packages import urllib3
+urllib3.disable_warnings()
 
 
 def logger_in():
@@ -142,7 +144,7 @@ class Stream:
         _return_tup = None, 0, 0
 
         try:
-            r = s.get(url, timeout=(1, 3), allow_redirects=False)
+            r = s.get(url, timeout=(1, 3), allow_redirects=False, verify=False)
 
         except requests.HTTPError as err:
             logger.error('requests.HTTPError: {} {}'.format(url, err))

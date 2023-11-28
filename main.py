@@ -315,7 +315,7 @@ class Stream:
             if r_bytes is None:
                 logger.error(
                     '{} "process_ts_cdn" "if r_b is None" ，"Stream.get_delay" 结果为空; url: {}'.format(
-                        self.stream_name, self.cdn_m3_url))
+                        self.stream_name, ts_url))
                 ts_md5 = 'get为空，检查日志'
                 self.cdn_ts_values.append([ts_md5, r_bytes_len, r_bytes_ttfb, r_bytes_ttlb])
                 return

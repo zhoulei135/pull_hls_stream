@@ -13,7 +13,7 @@
  - 1 : 某条流实例初始化时get请求为空，检查错误日志中url，手工测试是否正确
 
 # 配置文件 stream.conf 格式说明
-保存路径   流名  源站URL  CDN加速url  
+保存路径   流名  cdnUrl  srcUrl 
 d:/ts/  test_stream_1  http://220.161.87.62:8800/hls/0/index.m3u8  http://220.161.87.62:8800/hls/0/index.m3u8  
 d:/ts/  test_stream_2  http://220.161.87.62:8800/hls/0/index.m3u8  http://220.161.87.62:8800/hls/0/index.m3u8  
 每条流一行
@@ -26,4 +26,4 @@ d:/ts/  test_stream_2  http://220.161.87.62:8800/hls/0/index.m3u8  http://220.16
  - 时延数据保存在“流名”文件夹下
  - m3u8、ts文件CDN流和源站流分别保存在cdn和src文件夹下
 ### 版本
- - 修复日志问题："process_ts_cdn" "if r_b is None" ，"Stream.get_delay" 打印的m3u8链接
+ - 可视优化：调转配置文件中cdn和src的url顺序与拨测结果表格中顺寻一致

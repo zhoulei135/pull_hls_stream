@@ -423,8 +423,8 @@ def main():
                 s_c_l = stream_conf.split()
                 save_path = s_c_l[0]
                 stream_name = s_c_l[1]
-                src_m3_url = s_c_l[2]
-                cdn_m3_urln = s_c_l[3]
+                cdn_m3_urln = s_c_l[2]
+                src_m3_url = s_c_l[3]
                 inss.append(Stream(save_path, stream_name, src_m3_url, cdn_m3_urln))
 
             thread_pool = []

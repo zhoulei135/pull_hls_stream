@@ -13,7 +13,7 @@
  - 1 : 某条流实例初始化时get请求为空，检查错误日志中url，手工测试是否正确
 
 # 配置文件 stream.conf 格式说明
-保存路径   流名  cdnUrl  srcUrl 
+保存路径   流名  cdnUrl  srcUrl  
 d:/ts/  test_stream_1  http://220.161.87.62:8800/hls/0/index.m3u8  http://220.161.87.62:8800/hls/0/index.m3u8  
 d:/ts/  test_stream_2  http://220.161.87.62:8800/hls/0/index.m3u8  http://220.161.87.62:8800/hls/0/index.m3u8  
 每条流一行

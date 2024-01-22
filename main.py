@@ -241,10 +241,10 @@ class Stream:
             cdn_m3_url_p = urlparse(self.cdn_m3_url)
             if 'http' in cdn_m3_extinf:
                 self.cdn_ts_urls.append(cdn_m3_extinf)
-                return
+                continue
             elif '/' in cdn_m3_extinf:
                 self.cdn_ts_urls.append('{}://{}{}'.format(cdn_m3_url_p.scheme, cdn_m3_url_p.netloc, cdn_m3_extinf))
-                return
+                continue
             else:
                 uri_l = cdn_m3_url_p.path.split('/')
                 uri_l[-1] = cdn_m3_extinf
